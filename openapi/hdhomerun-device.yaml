@@ -1,0 +1,599 @@
+openapi: 3.0.3
+info:
+  title: HDHomerun Device & Cloud API
+  description: |
+    APIs consumed by the hdhomerun-web app. Two distinct base URLs are in play:
+    - **Device** — the HDHomerun hardware on the local network (`http://<HDHOMERUN_IP>`)
+    - **Cloud** — HDHomerun's hosted service (`https://api.hdhomerun.com/api`)
+
+    All timestamps are Unix epoch seconds. `DeviceAuth` is a device-bound token
+    obtained from `GET /discover.json` and required by every cloud endpoint.
+  version: 1.0.0
+
+servers:
+  - url: http://{deviceIp}
+    description: HDHomerun device (local network)
+    variables:
+      deviceIp:
+        default: "192.168.1.100"
+        description: IP address of the HDHomerun device
+  - url: https://api.hdhomerun.com/api
+    description: HDHomerun cloud API
+
+paths:
+  # ── Device endpoints ────────────────────────────────────────────────────────
+
+  /discover.json:
+    get:
+      summary: Device discovery
+      description: Returns device identity and the `DeviceAuth` token required by cloud endpoints.
+      servers:
+        - url: http://{deviceIp}
+          variables:
+            deviceIp:
+              default: "192.168.1.100"
+      responses:
+        "200":
+          description: Device info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceInfo"
+        "503":
+          description: Device unreachable
+
+  /lineup.json:
+    get:
+      summary: Channel lineup
+      description: Returns all provisioned channels including their live stream URLs.
+      servers:
+        - url: http://{deviceIp}
+          variables:
+            deviceIp:
+              default: "192.168.1.100"
+      responses:
+        "200":
+          description: Array of channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Channel"
+
+  /recorded_files.json:
+    get:
+      summary: Recorded series groups
+      description: |
+        Returns a list of recorded series. Each entry has an `EpisodesURL` pointing
+        to the per-series episode list on the device storage server.
+      servers:
+        - url: http://{deviceIp}
+          variables:
+            deviceIp:
+              default: "192.168.1.100"
+      responses:
+        "200":
+          description: Array of recording series
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RecordingSeries"
+
+  # ── Cloud endpoints ─────────────────────────────────────────────────────────
+
+  /guide:
+    get:
+      summary: Program guide for a single channel
+      description: |
+        Returns guide data for one channel. The HDHomerun cloud only handles
+        one channel per request; the app fetches concurrently in batches of 5.
+      servers:
+        - url: https://api.hdhomerun.com/api
+      parameters:
+        - name: DeviceAuth
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Auth token from `GET /discover.json`
+        - name: Channel
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Guide number (e.g. `"4.1"`)
+      responses:
+        "200":
+          description: Array of guide channels (typically one entry)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GuideChannel"
+        "204":
+          description: No guide data available for this channel
+
+  /recording_rules:
+    get:
+      summary: List recording rules
+      servers:
+        - url: https://api.hdhomerun.com/api
+      parameters:
+        - name: DeviceAuth
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Auth token from `GET /discover.json`
+      responses:
+        "200":
+          description: |
+            Array of all recording rules. Ordered DateTimeOnly first, then by
+            priority (highest first). Returns `null` when no rules exist.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RecordingRule"
+
+    post:
+      summary: Add, modify, or delete a recording rule
+      description: |
+        All mutations go through POST with a `Cmd` query parameter:
+
+        - **`Cmd=add`** — Add or update a series rule (`SeriesID` required) or a
+          one-time rule (`SeriesID` + `DateTimeOnly` + `ChannelOnly` required).
+          If a rule already exists for the same `SeriesID` it is updated in place.
+        - **`Cmd=change`** — Reorder a rule by priority (`RecordingRuleID` +
+          `AfterRecordingRuleID` required). Only applies to series/movie rules;
+          DateTimeOnly rules are always highest priority.
+        - **`Cmd=delete`** — Remove a rule (`RecordingRuleID` required).
+
+        All parameters are passed as query string values (no request body).
+
+        After any add/change/delete the client **must** POST to
+        `<BaseURL>/recording_events.post?sync` on every local device with a
+        `StorageURL` so the device recomputes its upcoming record tasks.
+
+        Returns the full updated list of recording rules on success.
+      servers:
+        - url: https://api.hdhomerun.com/api
+      parameters:
+        - name: DeviceAuth
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Auth token from `GET /discover.json`
+        - name: Cmd
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [add, change, delete]
+          description: Operation to perform
+        - name: SeriesID
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Required for `Cmd=add`
+        - name: ChannelOnly
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Pipe-separated channel numbers to restrict recording (e.g. `"4.1|7.2"`).
+            Required together with `DateTimeOnly` for one-time rules.
+        - name: TeamOnly
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pipe-separated team names (e.g. `"England|Wales"`)
+        - name: RecentOnly
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+          description: Record only recent/new episodes (default 0)
+        - name: AfterOriginalAirdateOnly
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Unix epoch seconds; skip episodes aired before this date
+        - name: DateTimeOnly
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: |
+            Unix epoch seconds; creates a one-time rule for the airing that starts
+            at exactly this time. Required with `ChannelOnly` for one-time rules.
+        - name: StartPadding
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Extra seconds to record before start (default 30, max 3600)
+        - name: EndPadding
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Extra seconds to record after end (default 30, max 10800)
+        - name: RecordingRuleID
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Required for `Cmd=change` and `Cmd=delete`
+        - name: AfterRecordingRuleID
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Required for `Cmd=change`. ID of the rule this rule should follow in
+            priority order, or `"0"` to make it highest priority.
+      responses:
+        "200":
+          description: Full updated list of recording rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RecordingRule"
+        "400":
+          description: Missing or invalid parameters
+
+  /recording_events.post:
+    post:
+      summary: Notify device to recompute scheduled recordings
+      description: |
+        Must be called after any recording rule is added, changed, or deleted.
+        Tells the device's DVR engine to re-evaluate upcoming record tasks against
+        the current rule set.
+
+        The full URL is `<BaseURL>/recording_events.post?sync` where `BaseURL`
+        comes from `GET /discover.json`. Call this for every local device that has
+        a `StorageURL` field.
+      servers:
+        - url: http://{deviceIp}
+          variables:
+            deviceIp:
+              default: "192.168.1.100"
+      parameters:
+        - name: sync
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [""]
+          description: No value required; presence of the `sync` key triggers the recompute
+      responses:
+        "200":
+          description: Acknowledged (returns `null`)
+
+  # ── Device storage (EpisodesURL / CmdURL) ───────────────────────────────────
+  # These paths are dynamic — the full URL is returned as EpisodesURL / CmdURL
+  # in the recorded_files.json response.
+
+  /{episodesPath}:
+    get:
+      summary: Episodes for a recorded series
+      description: |
+        The full URL is provided as `EpisodesURL` in each `RecordingSeries` object.
+        Returns individual episode records including the `PlayURL` for streaming.
+      servers:
+        - url: http://{deviceIp}
+          variables:
+            deviceIp:
+              default: "192.168.1.100"
+      parameters:
+        - name: episodesPath
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Path component from `EpisodesURL`
+      responses:
+        "200":
+          description: Array of recording episodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RecordingEpisode"
+
+  /{cmdPath}:
+    post:
+      summary: Episode management command (delete)
+      description: |
+        The full URL is provided as `CmdURL` in each `RecordingEpisode`. Append
+        `&cmd=delete` to delete the episode.
+      servers:
+        - url: http://{deviceIp}
+          variables:
+            deviceIp:
+              default: "192.168.1.100"
+      parameters:
+        - name: cmdPath
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cmd
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [delete]
+      responses:
+        "200":
+          description: Command executed
+        "500":
+          description: Command failed
+
+components:
+  schemas:
+    DeviceInfo:
+      type: object
+      required: [FriendlyName, ModelNumber, FirmwareVersion, FirmwareName, DeviceID, DeviceAuth, BaseURL, LineupURL]
+      properties:
+        FriendlyName:
+          type: string
+          example: "HDHomeRun FLEX DUO"
+        ModelNumber:
+          type: string
+          example: "HDFX-2US"
+        FirmwareVersion:
+          type: string
+          example: "20260326"
+        FirmwareName:
+          type: string
+          example: "hdhomerun_dvr_atsc"
+        DeviceID:
+          type: string
+          example: "1099232D"
+        DeviceAuth:
+          type: string
+          description: Token passed to all cloud API requests; rotates periodically
+        BaseURL:
+          type: string
+          format: uri
+        LineupURL:
+          type: string
+          format: uri
+        TunerCount:
+          type: integer
+          example: 2
+        StorageID:
+          type: string
+          description: UUID identifying the built-in DVR storage volume
+          example: "1099232D-13D8-41FA-940C-1F9D2D5D9F8D"
+        StorageURL:
+          type: string
+          format: uri
+          description: |
+            URL of the recorded files endpoint on this device. Presence of this
+            field indicates the device has local DVR storage. Used to construct
+            the `/recording_events.post?sync` notification URL.
+        TotalSpace:
+          type: integer
+          description: Total DVR storage capacity in bytes
+        FreeSpace:
+          type: integer
+          description: Available DVR storage in bytes
+
+    Channel:
+      type: object
+      required: [GuideNumber, GuideName, URL]
+      properties:
+        GuideNumber:
+          type: string
+          example: "4.1"
+        GuideName:
+          type: string
+          example: "NBC"
+        VideoCodec:
+          type: string
+          example: "H264"
+        AudioCodec:
+          type: string
+          example: "AC3"
+        HD:
+          type: integer
+          enum: [0, 1]
+        Favorite:
+          type: integer
+          enum: [0, 1]
+        URL:
+          type: string
+          format: uri
+          description: Live MPEG-TS stream URL
+
+    GuideProgram:
+      type: object
+      required: [Title, StartTime, EndTime]
+      properties:
+        Title:
+          type: string
+        EpisodeTitle:
+          type: string
+        Synopsis:
+          type: string
+        StartTime:
+          type: integer
+          description: Unix epoch seconds
+        EndTime:
+          type: integer
+          description: Unix epoch seconds
+        ImageURL:
+          type: string
+          format: uri
+        Filter:
+          type: array
+          items:
+            type: string
+          description: Genre tags (e.g. ["News", "Drama"])
+        SeriesID:
+          type: string
+        EpisodeNumber:
+          type: string
+          example: "S03E07"
+        OriginalAirdate:
+          type: integer
+          description: Unix epoch seconds
+        RecordingRule:
+          type: integer
+          enum: [0, 1]
+          description: 1 if a recording rule matches this program
+        RecordingInProgress:
+          type: integer
+          enum: [0, 1]
+
+    GuideChannel:
+      type: object
+      required: [GuideNumber, GuideName, Guide]
+      properties:
+        GuideNumber:
+          type: string
+        GuideName:
+          type: string
+        Affiliate:
+          type: string
+        ImageURL:
+          type: string
+          format: uri
+        Guide:
+          type: array
+          items:
+            $ref: "#/components/schemas/GuideProgram"
+
+    RecordingSeries:
+      type: object
+      required: [SeriesID, Title, EpisodesURL]
+      properties:
+        SeriesID:
+          type: string
+        Title:
+          type: string
+        Category:
+          type: string
+        ImageURL:
+          type: string
+          format: uri
+        StartTime:
+          type: integer
+          description: Unix epoch seconds of most recent episode
+        New:
+          type: integer
+          enum: [0, 1]
+          description: 1 if there are unwatched episodes
+        EpisodesURL:
+          type: string
+          format: uri
+          description: Full URL to fetch episodes for this series
+
+    RecordingEpisode:
+      type: object
+      required: [StartTime, PlayURL]
+      properties:
+        SeriesID:
+          type: string
+        Title:
+          type: string
+        EpisodeTitle:
+          type: string
+        EpisodeNumber:
+          type: string
+        Synopsis:
+          type: string
+        StartTime:
+          type: integer
+          description: Unix epoch seconds
+        EndTime:
+          type: integer
+          description: Unix epoch seconds
+        RecordDuration:
+          type: integer
+          description: Recorded duration in seconds
+        RecordFileSize:
+          type: integer
+          description: File size in bytes
+        ChannelName:
+          type: string
+        ChannelNumber:
+          type: string
+        ImageURL:
+          type: string
+          format: uri
+        PlayURL:
+          type: string
+          format: uri
+          description: MPEG-TS stream URL for this recording
+        CmdURL:
+          type: string
+          format: uri
+          description: Base URL for episode management commands (append `&cmd=delete`)
+        OriginalAirdate:
+          type: integer
+          description: Unix epoch seconds
+
+    RecordingRule:
+      type: object
+      required: [RecordingRuleID, SeriesID, Title]
+      properties:
+        RecordingRuleID:
+          type: string
+          description: Numeric string assigned by the cloud
+        SeriesID:
+          type: string
+        Title:
+          type: string
+        Synopsis:
+          type: string
+        ImageURL:
+          type: string
+          format: uri
+        ChannelOnly:
+          type: string
+          description: Pipe-separated channel numbers (e.g. `"4.1|7.2"`)
+        TeamOnly:
+          type: string
+          description: Pipe-separated team names (e.g. `"England|Wales"`)
+        AfterOriginalAirdateOnly:
+          type: integer
+          description: Unix epoch seconds; only record episodes aired on or after this date
+        RecentOnly:
+          type: integer
+          enum: [0, 1]
+          description: 1 to skip re-runs (episodes with a known original airdate in the past)
+        KeepUpTo:
+          type: integer
+          description: Maximum episodes to retain on the device
+        DateTimeOnly:
+          type: integer
+          description: Unix epoch seconds; one-time rule that targets only this airing
+        Priority:
+          type: integer
+          description: |
+            Series/movie rule priority (1 = highest). Omitted for one-time
+            (DateTimeOnly) rules, which are always highest priority.
+        StartPadding:
+          type: integer
+          description: Extra seconds to record before the program start (default 30)
+        EndPadding:
+          type: integer
+          description: Extra seconds to record after the program end (default 30)
