@@ -16,9 +16,17 @@ export async function GET(req: NextRequest) {
 
   const targetUrl = decodeURIComponent(rawUrl);
   const isLive = searchParams.get("live") !== "false";
-  console.log(`[hdhomerun] ${new Date().toISOString()} [DEVICE] GET ${targetUrl} {"type":"${isLive ? "live" : "recording"}","via":"ffmpeg"}`);
+  const startTimeSec = parseFloat(searchParams.get("startTime") ?? "0") || 0;
+  console.log(`[hdhomerun] ${new Date().toISOString()} [DEVICE] GET ${targetUrl} {"type":"${isLive ? "live" : "recording"}","via":"ffmpeg"${startTimeSec > 0 ? `,"startTime":${startTimeSec}` : ""}}`);
+
+  const ffmpegArgs: string[] = [];
+  if (startTimeSec > 0) {
+    // Input seek (fast, keyframe-accurate) — must come before -i
+    ffmpegArgs.push("-ss", String(startTimeSec));
+  }
 
   const ffmpeg = spawn("ffmpeg", [
+    ...ffmpegArgs,
     // no -re: the device already streams at broadcast rate
     "-i", targetUrl,
     "-c:v", "libx264",             // software H.264 — consistent profile (VideoToolbox changes profiles mid-stream, breaking MSE)

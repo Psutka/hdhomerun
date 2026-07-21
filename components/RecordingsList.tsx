@@ -26,14 +26,34 @@ function formatDate(ts: number): string {
   });
 }
 
+function buildFilename(ep: RecordingEpisode, seriesTitle: string): string {
+  const parts: string[] = [seriesTitle];
+  if (ep.EpisodeNumber) parts.push(ep.EpisodeNumber);
+  if (ep.EpisodeTitle && ep.EpisodeTitle !== seriesTitle) parts.push(ep.EpisodeTitle);
+  const date = new Date(ep.StartTime * 1000).toISOString().slice(0, 10);
+  parts.push(date);
+  return parts.join(" - ").replace(/[/\\:*?"<>|]/g, "_") + ".ts";
+}
+
+function triggerDownload(href: string) {
+  const a = document.createElement("a");
+  a.href = href;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 interface EpisodeCardProps {
   ep: RecordingEpisode;
   seriesTitle: string;
   onPlay: () => void;
   onDelete: () => void;
+  batchMode: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
 }
 
-function EpisodeCard({ ep, seriesTitle, onPlay, onDelete }: EpisodeCardProps) {
+function EpisodeCard({ ep, seriesTitle, onPlay, onDelete, batchMode, selected, onToggleSelect }: EpisodeCardProps) {
   const duration = ep.RecordDuration
     ? formatDuration(ep.RecordDuration)
     : ep.EndTime && ep.StartTime
@@ -41,9 +61,35 @@ function EpisodeCard({ ep, seriesTitle, onPlay, onDelete }: EpisodeCardProps) {
     : null;
 
   const label = ep.EpisodeTitle || ep.Title || seriesTitle;
+  const downloadHref = `/api/download?url=${encodeURIComponent(ep.PlayURL)}&filename=${encodeURIComponent(buildFilename(ep, seriesTitle))}`;
 
   return (
-    <div className="group flex gap-3 p-3 rounded-lg bg-bg-secondary border border-border hover:border-border-bright transition-all">
+    <div
+      className={`group flex gap-3 p-3 rounded-lg bg-bg-secondary border transition-all ${
+        batchMode
+          ? `cursor-pointer ${selected ? "border-accent-green/50 bg-accent-green/5" : "border-border hover:border-border-bright"}`
+          : "border-border hover:border-border-bright"
+      }`}
+      onClick={batchMode ? onToggleSelect : undefined}
+    >
+      {/* Checkbox — batch mode only */}
+      {batchMode && (
+        <div className="flex items-center shrink-0">
+          <div
+            className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+              selected ? "bg-accent-green border-accent-green" : "border-border-bright bg-transparent"
+            }`}
+          >
+            {selected && (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} className="w-3 h-3 text-bg-primary">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Thumbnail */}
       {ep.ImageURL ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -59,53 +105,56 @@ function EpisodeCard({ ep, seriesTitle, onPlay, onDelete }: EpisodeCardProps) {
         </div>
       )}
 
+      {/* Metadata */}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-text-primary truncate">{label}</p>
         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-          {ep.ChannelName && (
-            <span className="text-xs text-accent-cyan">{ep.ChannelName}</span>
-          )}
-          {ep.EpisodeNumber && (
-            <span className="text-xs text-text-muted">{ep.EpisodeNumber}</span>
-          )}
-          {ep.StartTime && (
-            <span className="text-xs text-text-muted">{formatDate(ep.StartTime)}</span>
-          )}
-          {duration && (
-            <span className="text-xs text-text-muted">{duration}</span>
-          )}
-          {ep.RecordFileSize && (
-            <span className="text-xs text-text-muted">{formatFileSize(ep.RecordFileSize)}</span>
-          )}
+          {ep.ChannelName && <span className="text-xs text-accent-cyan">{ep.ChannelName}</span>}
+          {ep.EpisodeNumber && <span className="text-xs text-text-muted">{ep.EpisodeNumber}</span>}
+          {ep.StartTime && <span className="text-xs text-text-muted">{formatDate(ep.StartTime)}</span>}
+          {duration && <span className="text-xs text-text-muted">{duration}</span>}
+          {ep.RecordFileSize && <span className="text-xs text-text-muted">{formatFileSize(ep.RecordFileSize)}</span>}
         </div>
         {ep.Synopsis && (
           <p className="text-xs text-text-secondary mt-1 line-clamp-2">{ep.Synopsis}</p>
         )}
       </div>
 
-      <div className="flex flex-col gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          onClick={onPlay}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold text-bg-primary transition-all hover:brightness-110"
-          style={{ background: "#00d4ff" }}
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-          Play
-        </button>
-        {ep.CmdURL && (
+      {/* Action buttons — hidden in batch mode */}
+      {!batchMode && (
+        <div className="flex flex-col gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
-            onClick={onDelete}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold text-white border border-border hover:border-accent-red hover:text-accent-red transition-colors"
+            onClick={onPlay}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold text-bg-primary transition-all hover:brightness-110"
+            style={{ background: "#00d4ff" }}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Play
+          </button>
+          <a
+            href={downloadHref}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold text-white border border-border hover:border-accent-green hover:text-accent-green transition-colors"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
-              <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+              <path d="M12 3v13M7 11l5 5 5-5" /><path d="M5 20h14" />
             </svg>
-            Delete
-          </button>
-        )}
-      </div>
+            Download
+          </a>
+          {ep.CmdURL && (
+            <button
+              onClick={onDelete}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold text-white border border-border hover:border-accent-red hover:text-accent-red transition-colors"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+              </svg>
+              Delete
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -120,14 +169,16 @@ function SeriesCard({ series, onPlayEpisode }: SeriesCardProps) {
   const [episodes, setEpisodes] = useState<RecordingEpisode[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedEpisodes, setSelectedEpisodes] = useState<Set<string>>(new Set());
+
+  const selectedCount = selectedEpisodes.size;
 
   const loadEpisodes = async () => {
     if (loaded) return;
     setLoading(true);
     try {
-      const res = await fetch(
-        `/api/recordings/episodes?url=${encodeURIComponent(series.EpisodesURL)}`
-      );
+      const res = await fetch(`/api/recordings/episodes?url=${encodeURIComponent(series.EpisodesURL)}`);
       const data = await res.json();
       setEpisodes(Array.isArray(data) ? data.sort((a: RecordingEpisode, b: RecordingEpisode) => b.StartTime - a.StartTime) : []);
       setLoaded(true);
@@ -136,27 +187,79 @@ function SeriesCard({ series, onPlayEpisode }: SeriesCardProps) {
     }
   };
 
+  // Pre-select all episodes when batch mode activates and episodes are loaded
+  useEffect(() => {
+    if (batchMode && loaded && episodes.length > 0 && selectedEpisodes.size === 0) {
+      setSelectedEpisodes(new Set(episodes.map((ep) => ep.PlayURL)));
+    }
+  }, [batchMode, loaded, episodes]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleExpand = () => {
     const next = !expanded;
     setExpanded(next);
     if (next && !loaded) loadEpisodes();
+    if (!next) exitBatchMode();
+  };
+
+  const enterBatchMode = () => {
+    if (!expanded) {
+      setExpanded(true);
+      if (!loaded) loadEpisodes();
+    }
+    setBatchMode(true);
+  };
+
+  const exitBatchMode = () => {
+    setBatchMode(false);
+    setSelectedEpisodes(new Set());
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedCount === episodes.length) {
+      setSelectedEpisodes(new Set());
+    } else {
+      setSelectedEpisodes(new Set(episodes.map((ep) => ep.PlayURL)));
+    }
+  };
+
+  const toggleSelect = (playURL: string) => {
+    setSelectedEpisodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(playURL)) next.delete(playURL);
+      else next.add(playURL);
+      return next;
+    });
+  };
+
+  const handleBatchDownload = () => {
+    const toDownload = episodes.filter((ep) => selectedEpisodes.has(ep.PlayURL));
+    toDownload.forEach((ep, i) => {
+      setTimeout(() => {
+        triggerDownload(
+          `/api/download?url=${encodeURIComponent(ep.PlayURL)}&filename=${encodeURIComponent(buildFilename(ep, series.Title))}`
+        );
+      }, i * 600);
+    });
+    exitBatchMode();
   };
 
   const handleDelete = async (ep: RecordingEpisode) => {
     if (!ep.CmdURL) return;
-    await fetch(
-      `/api/recordings/episodes?cmdUrl=${encodeURIComponent(ep.CmdURL)}`,
-      { method: "DELETE" }
-    );
+    await fetch(`/api/recordings/episodes?cmdUrl=${encodeURIComponent(ep.CmdURL)}`, { method: "DELETE" });
     setEpisodes((prev) => prev.filter((e) => e.CmdURL !== ep.CmdURL));
   };
 
   return (
-    <div className="rounded-xl border border-border bg-bg-card overflow-hidden">
-      <button
-        className="w-full flex gap-4 p-4 hover:bg-bg-hover/40 transition-colors text-left"
+    <div className="group/card rounded-xl border border-border bg-bg-card overflow-hidden">
+      {/* Header — div instead of button to allow nested buttons */}
+      <div
+        className="flex gap-4 p-4 hover:bg-bg-hover/40 transition-colors cursor-pointer select-none"
         onClick={handleExpand}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleExpand(); }}
       >
+        {/* Poster */}
         {series.ImageURL ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -176,6 +279,7 @@ function SeriesCard({ series, onPlayEpisode }: SeriesCardProps) {
           </div>
         )}
 
+        {/* Info */}
         <div className="flex-1 min-w-0">
           <h3 className="text-base font-bold text-text-primary">{series.Title}</h3>
           <div className="flex items-center gap-2 mt-1">
@@ -195,7 +299,43 @@ function SeriesCard({ series, onPlayEpisode }: SeriesCardProps) {
           )}
         </div>
 
-        <div className="shrink-0 self-center">
+        {/* Right actions */}
+        <div className="shrink-0 self-center flex items-center gap-2">
+          {batchMode ? (
+            <>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleBatchDownload(); }}
+                disabled={selectedCount === 0}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-colors ${
+                  selectedCount > 0
+                    ? "text-accent-green border-accent-green/50 bg-accent-green/10 hover:bg-accent-green/20"
+                    : "text-text-muted border-border cursor-not-allowed opacity-50"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+                  <path d="M12 3v13M7 11l5 5 5-5" /><path d="M5 20h14" />
+                </svg>
+                Download {selectedCount > 0 ? `(${selectedCount})` : ""}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); exitBatchMode(); }}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-text-muted hover:text-text-primary border border-border hover:border-border-bright transition-colors"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); enterBatchMode(); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-text-secondary border border-border hover:border-accent-green hover:text-accent-green transition-colors opacity-0 group-hover/card:opacity-100"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+                <path d="M12 3v13M7 11l5 5 5-5" /><path d="M5 20h14" />
+              </svg>
+              Batch Download
+            </button>
+          )}
+
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -206,10 +346,11 @@ function SeriesCard({ series, onPlayEpisode }: SeriesCardProps) {
             <path d="M6 9l6 6 6-6" />
           </svg>
         </div>
-      </button>
+      </div>
 
+      {/* Expanded content */}
       {expanded && (
-        <div className="border-t border-border px-4 pb-4 pt-3 space-y-2">
+        <div className="border-t border-border px-4 pb-4 pt-3">
           {loading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, i) => (
@@ -219,17 +360,56 @@ function SeriesCard({ series, onPlayEpisode }: SeriesCardProps) {
           ) : episodes.length === 0 ? (
             <p className="text-sm text-text-muted py-4 text-center">No episodes found</p>
           ) : (
-            episodes.map((ep, i) => (
-              <EpisodeCard
-                key={ep.CmdURL ?? i}
-                ep={ep}
-                seriesTitle={series.Title}
-                onPlay={() => onPlayEpisode(ep, series.Title)}
-                onDelete={() => {
-                  if (confirm(`Delete this episode?`)) handleDelete(ep);
-                }}
-              />
-            ))
+            <>
+              {/* Batch mode toolbar */}
+              {batchMode && (
+                <div className="flex items-center gap-3 mb-3 pb-3 border-b border-border">
+                  <button
+                    onClick={toggleSelectAll}
+                    className="flex items-center gap-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
+                  >
+                    <div
+                      className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                        selectedCount === episodes.length
+                          ? "bg-accent-green border-accent-green"
+                          : selectedCount > 0
+                          ? "bg-accent-green/30 border-accent-green/60"
+                          : "border-border-bright"
+                      }`}
+                    >
+                      {selectedCount > 0 && (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} className="w-2.5 h-2.5 text-bg-primary">
+                          {selectedCount === episodes.length
+                            ? <path d="M20 6L9 17l-5-5" />
+                            : <path d="M5 12h14" />
+                          }
+                        </svg>
+                      )}
+                    </div>
+                    {selectedCount === episodes.length ? "Deselect all" : "Select all"}
+                  </button>
+                  <span className="text-xs text-text-muted">
+                    {selectedCount} of {episodes.length} selected
+                  </span>
+                </div>
+              )}
+
+              {/* Episode list */}
+              <div className="space-y-2">
+                {episodes.map((ep, i) => (
+                  <EpisodeCard
+                    key={ep.CmdURL ?? i}
+                    ep={ep}
+                    seriesTitle={series.Title}
+                    onPlay={() => onPlayEpisode(ep, series.Title)}
+                    onDelete={() => { if (confirm("Delete this episode?")) handleDelete(ep); }}
+                    batchMode={batchMode}
+                    selected={selectedEpisodes.has(ep.PlayURL)}
+                    onToggleSelect={() => toggleSelect(ep.PlayURL)}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
       )}
@@ -242,7 +422,7 @@ export default function RecordingsList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [playing, setPlaying] = useState<{ url: string; title: string; subtitle: string } | null>(null);
+  const [playing, setPlaying] = useState<{ url: string; title: string; subtitle: string; duration?: number } | null>(null);
 
   useEffect(() => {
     fetch("/api/recordings")
@@ -272,6 +452,7 @@ export default function RecordingsList() {
           title={playing.title}
           subtitle={playing.subtitle}
           isLive={false}
+          duration={playing.duration}
           onClose={() => setPlaying(null)}
         />
       </div>
@@ -336,6 +517,8 @@ export default function RecordingsList() {
                     url: ep.PlayURL,
                     title,
                     subtitle: ep.EpisodeTitle || ep.Title || formatDate(ep.StartTime),
+                    duration: ep.RecordDuration
+                      ?? (ep.EndTime ? ep.EndTime - ep.StartTime : undefined),
                   })
                 }
               />

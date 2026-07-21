@@ -287,6 +287,51 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/download:
+    get:
+      summary: Download a recorded episode
+      description: |
+        Proxies the raw MPEG-TS file from the device and delivers it as a
+        browser download (`Content-Disposition: attachment`). No transcoding —
+        the original file is streamed as-is. Pass the episode's `PlayURL`
+        URL-encoded as `url`, and an optional `filename` for the saved file.
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: URL-encoded value of `PlayURL` from a `RecordingEpisode`
+        - name: filename
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Suggested filename for the download (default `recording.ts`).
+            Typically constructed as `SeriesTitle - EpisodeNumber - Date.ts`.
+      responses:
+        "200":
+          description: Raw MPEG-TS file stream
+          content:
+            video/mp2t:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Missing `url` parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Device unreachable or returned an error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/stream:
     get:
       summary: Transcode and stream video
