@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+*.tsbuildinfo
+hdhomerun.db
+hdhomerun.db-shm
+hdhomerun.db-wal
+.env.local
+Dockerfile
+docker-compose.yml
+.dockerignore

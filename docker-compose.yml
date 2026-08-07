@@ -1,0 +1,13 @@
+services:
+  hdhomerun-web:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.local
+    volumes:
+      - hdhomerun-data:/data
+    restart: unless-stopped
+
+volumes:
+  hdhomerun-data:
